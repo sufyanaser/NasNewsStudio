@@ -5,6 +5,12 @@ contextBridge.exposeInMainWorld('api', {
   listSource: (id, params) => ipcRenderer.invoke('source:list', id, params),
   openExternal: (url) => ipcRenderer.invoke('shell:open', url),
   reveal: (faceId) => ipcRenderer.invoke('shell:reveal', faceId),
+  install: (item) => ipcRenderer.invoke('fonts:install', item),
+  onInstallEvent: (cb) => {
+    const handler = (_e, p) => cb(p);
+    ipcRenderer.on('install:event', handler);
+    return () => ipcRenderer.removeListener('install:event', handler);
+  },
   onSourceProgress: (cb) => {
     const handler = (_e, p) => cb(p);
     ipcRenderer.on('source:progress', handler);

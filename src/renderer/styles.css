@@ -127,3 +127,12 @@ input[type="range"] { width: 100%; accent-color: var(--nas-blue); height: 40px; 
 .count { direction: ltr; unicode-bidi: isolate; }
 
 .tag.src { color: var(--nas-silver); border-color: var(--nas-line-2); }
+
+/* install slot */
+.inst { margin-inline-start: auto; display: inline-flex; }
+.card select + .inst, .inst + select { margin-inline-start: 6px; }
+.btn.sm { padding: 4px 14px; font-size: 12px; border-radius: 10px; background: var(--nas-blue); border-color: var(--nas-blue); color: var(--nas-white); }
+.btn.sm:hover { border-color: var(--nas-silver); }
+.btn.sm:disabled { background: transparent; border-color: var(--nas-line-2); color: var(--nas-mute-2); cursor: default; }
+.tag.ok { color: var(--nas-silver); border-color: var(--nas-line-2); display: inline-flex; align-items: center; gap: 6px; }
+.tag.ok::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--studio-green); }

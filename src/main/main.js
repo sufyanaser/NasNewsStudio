@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, protocol, shell } from 'electron';
-import { readFile } from 'node:fs/promises';
+import { app, BrowserWindow, ipcMain, protocol, session, shell } from 'electron';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanLocalFonts } from './fonts/local-scan.js';
-import { configureHttp } from './sources/http.js';
-import { listGoogle } from './sources/google.js';
+import { configureHttp, fetchBinary } from './sources/http.js';
+import { installFontFiles, fontsFromDownload } from './fonts/install.js';
+import { listGoogle, googleFontFiles } from './sources/google.js';
 import { listAlfont } from './sources/alfont.js';
 import { listAndalusi } from './sources/andalusi.js';
 import { createAggregator } from './sources/all.js';
@@ -52,7 +53,112 @@ function isAllowedExternal(raw) {
   } catch { return false; }
 }
 
+/* ---------- install: source page window + download capture ---------- */
+// Hosts whose font pages may be opened in the in-app download window.
+const PAGE_HOSTS = ['alfont.com', 'fonnts.com'];
+// Development only (never honoured in a packaged build): extra "host:port" entries for local testing.
+const DEV_PAGE_HOSTS = app.isPackaged ? [] : (process.env.NAS_FONT_STUDIO_DEV_HOSTS || '').split(',').filter(Boolean);
+const DOWNLOAD_EXT = new Set(['.ttf', '.otf', '.ttc', '.otc', '.zip']);
+const MAX_DOWNLOAD_BYTES = 80 * 1024 * 1024;
+let pageWin = null;
+let pendingInstall = null; // { id, name }
+
+function isSourcePage(raw) {
+  try {
+    const u = new URL(raw);
+    if (DEV_PAGE_HOSTS.includes(u.host)) return true;
+    return u.protocol === 'https:' && PAGE_HOSTS.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`));
+  } catch { return false; }
+}
+
+function finishInstall(payload) {
+  const job = pendingInstall;
+  pendingInstall = null;
+  if (job) win?.webContents.send('install:event', { id: job.id, ...payload });
+  if (pageWin && !pageWin.isDestroyed()) pageWin.close();
+}
+
+function onSourceDownload(event, item) {
+  const name = item.getFilename();
+  const ext = path.extname(name).toLowerCase();
+  if (!pendingInstall) { event.preventDefault(); return; }
+  if (!DOWNLOAD_EXT.has(ext) || item.getTotalBytes() > MAX_DOWNLOAD_BYTES) {
+    event.preventDefault();
+    finishInstall({ status: 'error', message: `نوع الملف غير مدعوم للتنصيب المباشر (${name}). حمّله من صفحة الخط في المتصفح.` });
+    return;
+  }
+  const tmp = path.join(app.getPath('temp'), `nfs-dl-${Date.now()}${ext}`);
+  item.setSavePath(tmp);
+  item.once('done', async (_e, state) => {
+    try {
+      if (state !== 'completed') throw new Error('لم يكتمل التحميل');
+      const res = await installFontFiles(fontsFromDownload(name, await readFile(tmp)));
+      if (!res.installed.length) throw new Error('لا يوجد ملف خط صالح داخل التحميل');
+      log(`installed ${res.installed.length} file(s) from ${name}`);
+      finishInstall({ status: 'done', count: res.installed.length, families: [...new Set(res.installed.map((i) => i.family))] });
+    } catch (err) {
+      log('install failed:', err.message);
+      finishInstall({ status: 'error', message: err.message });
+    } finally {
+      rm(tmp, { force: true }).catch(() => {});
+    }
+  });
+}
+
+function openSourcePage(job, url) {
+  // Isolated in-memory session: no access to the app, its storage, or node.
+  const ses = session.fromPartition('source-pages');
+  if (!ses.listenerCount('will-download')) {
+    ses.on('will-download', onSourceDownload);
+    ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  }
+  if (pageWin && !pageWin.isDestroyed()) { pendingInstall = null; pageWin.close(); }
+  pendingInstall = job;
+  pageWin = new BrowserWindow({
+    width: 1100, height: 820, parent: win ?? undefined, autoHideMenuBar: true, backgroundColor: '#ffffff',
+    title: `تنصيب: ${job.name}`,
+    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  const thisWin = pageWin;
+  // Pop-ups (ads) are refused; a same-site link that wants a new tab is opened in place.
+  thisWin.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (isSourcePage(target)) thisWin.loadURL(target);
+    return { action: 'deny' };
+  });
+  thisWin.on('closed', () => {
+    if (pageWin === thisWin) pageWin = null;
+    if (pendingInstall === job) finishInstall({ status: 'cancelled' });
+  });
+  thisWin.loadURL(url).catch((err) => { if (pendingInstall === job) finishInstall({ status: 'error', message: err.message }); });
+}
+
+async function installGoogle(name, variants) {
+  const files = await googleFontFiles(name, variants);
+  const payload = [];
+  for (const f of files) payload.push({ name: f.name, data: await fetchBinary(f.url, ['fonts.gstatic.com']) });
+  const res = await installFontFiles(payload);
+  if (!res.installed.length) throw new Error('لم يُنصَّب أي ملف');
+  log(`installed ${res.installed.length} file(s) for ${name}`);
+  return { status: 'done', count: res.installed.length, families: [...new Set(res.installed.map((i) => i.family))] };
+}
+
 function registerIpc() {
+  ipcMain.handle('fonts:install', async (_e, item) => {
+    const name = typeof item?.name === 'string' ? item.name.slice(0, 200) : '';
+    const id = typeof item?.id === 'string' ? item.id.slice(0, 600) : '';
+    if (!name || !id) throw new Error('طلب غير صالح');
+    if (item.source === 'google') {
+      const variants = Array.isArray(item.variants) ? item.variants.filter((v) => typeof v === 'string').slice(0, 40) : [];
+      return installGoogle(name, variants);
+    }
+    if (item.source === 'alfont') {
+      if (!isSourcePage(item.url)) throw new Error('رابط غير مسموح');
+      openSourcePage({ id, name }, item.url);
+      return { status: 'pending' };
+    }
+    throw new Error('هذا المصدر لا يدعم التنصيب المباشر');
+  });
+
   ipcMain.handle('fonts:scan', async (_e, opts) => {
     if (!scanInFlight) {
       const started = Date.now();

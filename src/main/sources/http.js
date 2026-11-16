@@ -61,6 +61,22 @@ export async function fetchText(url, { ttlMs = 24 * 3600_000, force = false } = 
   }
 }
 
+/** GET a binary resource (font file). Host must be on the allowlist; size is capped. */
+export async function fetchBinary(url, allowedHosts, maxBytes = 40 * 1024 * 1024) {
+  if (!safeUrl(url, undefined, allowedHosts)) throw new Error('رابط غير مسموح');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS * 2);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, headers: { 'user-agent': USER_AGENT } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = Buffer.from(await res.arrayBuffer());
+    if (data.length > maxBytes) throw new Error('الملف أكبر من المسموح');
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 export function decodeHtml(s) {
   return String(s || '')

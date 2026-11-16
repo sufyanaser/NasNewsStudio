@@ -68,6 +68,15 @@ const NAME_RULES = [
   ['serif', /serif|roman|times|garamond|georgia|bodoni|didot/],
 ];
 
+/** Name key used for duplicate / installed detection: case, spacing, punctuation and tatweel are ignored. */
+export function normalizeKey(name) {
+  return String(name || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\u0640\u064B-\u065F]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
 /** Classify by font name only. Returns null when the name says nothing. */
 export function classifyByName(name) {
   const n = String(name || '').toLowerCase();

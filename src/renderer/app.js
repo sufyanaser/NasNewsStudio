@@ -1,4 +1,4 @@
-import { LANGS, LANG_BY_ID, DEFAULT_LANG, CATEGORIES, langPriority } from '../shared/languages.js';
+import { LANGS, LANG_BY_ID, DEFAULT_LANG, CATEGORIES, langPriority, normalizeKey } from '../shared/languages.js';
 
 const $ = (id) => document.getElementById(id);
 const api = window.api;
@@ -41,8 +41,35 @@ if (S.lang !== 'all' && !LANG_BY_ID[S.lang]) S.lang = DEFAULT_LANG;
 
 /** key -> { items, hasMore, page, loading, error, stale } */
 const data = new Map();
-const dataKey = () => (S.source === 'alfont' ? `alfont:${S.cat}` : S.source);
+// The alfont main feed is served by the merged catalog, so it only lists fonts no other source has.
+const dataKey = () => (S.source === 'alfont' ? (S.cat === 'all' ? 'all' : `alfont:${S.cat}`) : S.source);
 const current = () => data.get(dataKey());
+/** Items of the visible tab (the alfont tab shows only its own slice of the merged list). */
+const tabItems = (d = current()) => (!d ? [] : S.source === 'alfont' ? d.items.filter((i) => i.source === 'alfont') : d.items);
+
+/* ---------------- installed-font tracking ---------------- */
+const INSTALLABLE = new Set(['google', 'alfont']);
+let installedKeys = new Set();
+const installedIds = new Set(store.get('installedIds', []));
+const pendingInstalls = new Map(); // item id -> card
+function rebuildInstalled(families) {
+  installedKeys = new Set();
+  for (const f of families) {
+    installedKeys.add(normalizeKey(f.name));
+    for (const face of f.faces) installedKeys.add(normalizeKey(face.fullName));
+  }
+  for (const card of $('grid').querySelectorAll('.card')) card._syncInstall?.();
+}
+const isInstalled = (item) => installedIds.has(item.id)
+  || [item.name, item.altName].some((n) => n && installedKeys.has(normalizeKey(n)));
+function statusLine(d) {
+  if (!d) return 'جاهز';
+  if (d.stale) return 'بدون اتصال · نسخة مخزّنة';
+  if (dataKey() === 'local') return d.summary || 'جاهز';
+  if (S.source === 'alfont') return `الفونت العربي · ${tabItems(d).length} خط غير مكرر`;
+  if (S.source === 'all') return `خطوط عربية فريدة: ${d.arabic ?? 0}${d.arabic < d.target ? ` (أقل من ${d.target})` : ''}`;
+  return `${SOURCES[S.source].label} · ${d.items.length}`;
+}
 
 /* ---------------- helpers ---------------- */
 function toast(msg, ms = 1800) {
@@ -169,16 +196,67 @@ function buildCard(item) {
   } else {
     open.onclick = async () => { if (!(await api.openExternal(item.url))) toast('رابط غير مسموح'); };
   }
+
+  if (INSTALLABLE.has(item.source)) {
+    const slot = el('span', { class: 'inst' });
+    foot.append(slot);
+    card._syncInstall = () => {
+      slot.replaceChildren();
+      if (isInstalled(item)) { slot.append(el('span', { class: 'tag ok', text: 'منصّب' })); return; }
+      const busy = pendingInstalls.has(item.id);
+      const b = el('button', { class: 'btn sm', type: 'button', text: busy ? 'بانتظار التحميل…' : 'تنصيب' });
+      b.disabled = busy;
+      b.onclick = () => installItem(item, card);
+      slot.append(b);
+    };
+    card._syncInstall();
+  }
   return card;
+}
+
+/* ---------------- install ---------------- */
+async function installItem(item, card) {
+  pendingInstalls.set(item.id, card);
+  card._syncInstall();
+  try {
+    const res = await api.install({ id: item.id, source: item.source, name: item.name, url: item.url, variants: item.variants || [] });
+    if (res.status === 'pending') { toast('اضغط زر التحميل في صفحة الخط، وسيُنصَّب تلقائياً', 5000); return; }
+    finishInstall(item.id, res);
+  } catch (err) {
+    pendingInstalls.delete(item.id);
+    card._syncInstall();
+    toast(`تعذّر التنصيب: ${String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, 5000);
+  }
+}
+function finishInstall(id, res) {
+  const card = pendingInstalls.get(id);
+  pendingInstalls.delete(id);
+  if (res.status === 'done') {
+    installedIds.add(id); store.set('installedIds', [...installedIds]);
+    toast(`تم التنصيب: ${res.families.join('، ')} (${res.count} ملف)`, 4000);
+    scanLocalQuiet(); // pick the new files up so the desktop tab and badges stay true
+  } else if (res.status === 'error') toast(`تعذّر التنصيب: ${res.message}`, 5000);
+  card?._syncInstall?.();
+}
+async function scanLocalQuiet() {
+  try {
+    const res = await api.scanLocal({});
+    const d = data.get('local') || { items: [], hasMore: false, page: 1, loading: false, error: null, stale: false };
+    d.items = res.families; d.summary = `${res.families.length} عائلة · ${res.fileCount} ملف`;
+    data.set('local', d);
+    rebuildInstalled(res.families);
+    if (S.source === 'local') refresh();
+  } catch { /* badges simply stay as they were */ }
 }
 
 /* ---------------- filtering + rendering ---------------- */
 function computeView() {
   const d = current();
   if (!d) return [];
+  const base = tabItems(d);
   const q = S.q.trim().toLowerCase();
   const remoteCats = !!SOURCES[S.source].sections;
-  let out = d.items.filter((it) =>
+  let out = base.filter((it) =>
     (S.lang === 'all' || it.langs.includes(S.lang)) &&
     (remoteCats || S.cat === 'all' || it.category === S.cat) &&
     (!S.favOnly || S.fav.has(it.id)) &&
@@ -221,7 +299,7 @@ function chip(text, count, pressed, onClick) {
 
 function renderFilters() {
   const d = current();
-  const items = d?.items || [];
+  const items = tabItems(d);
   const src = SOURCES[S.source];
 
   const langCount = {};
@@ -248,6 +326,7 @@ function renderFilters() {
   const note = $('note');
   note.hidden = src.live && !src.mixed;
   if (src.mixed) note.textContent = 'قائمة موحّدة بدون تكرار من Google Fonts وأندلسي والفونت العربي. النص التجريبي ينطبق على خطوط Google، والباقي معاينته صور من الموقع المصدر.';
+  else if (S.source === 'alfont') note.textContent = 'أحدث خطوط الفونت العربي غير الموجودة في أي مصدر آخر. المعاينة صور من الموقع. زر «تنصيب» يفتح صفحة الخط، وعند ضغط التحميل يُنصَّب الخط تلقائياً. راجع ترخيص كل خط قبل الاستخدام التجاري.';
   else if (!src.live) note.textContent = 'معاينة هذا المصدر صور جاهزة من الموقع نفسه، لذلك النص التجريبي لا ينطبق هنا. افتح صفحة الخط للتجربة والتحميل.';
   $('sample').disabled = !src.live;
 }
@@ -278,12 +357,12 @@ function refresh() {
     showState('تعذّر تحميل هذا المصدر', d.error, true, { label: 'إعادة المحاولة', run: () => load(true) });
     return;
   }
-  const total = d.items.length;
+  const total = tabItems(d).length;
   $('count').textContent = `${S.view.length} / ${total}${d.hasMore ? '+' : ''}${d.stale ? ' · نسخة مخزّنة' : ''}`;
   if (!S.view.length) {
     syncMore();
     if (S.favOnly) showState('لا توجد خطوط مفضلة هنا', 'اضغط على النجمة في أي خط لإضافته.');
-    else if (S.lang !== 'all' && !d.items.some((it) => it.langs.includes(S.lang)) && !d.hasMore) {
+    else if (S.lang !== 'all' && !tabItems(d).some((it) => it.langs.includes(S.lang)) && !d.hasMore) {
       showState(`لا توجد خطوط ${LANG_BY_ID[S.lang].label} في هذا المصدر`, null, false, { label: 'عرض كل اللغات', run: () => setLang('all') });
     } else if (!d.hasMore) showState('لا توجد نتائج', 'جرّب نوعاً آخر أو امسح البحث.');
     return;
@@ -312,22 +391,25 @@ async function fetchPage(key, d, page, force = false) {
       const res = await api.scanLocal({ force });
       d.items = res.families;
       d.summary = `${res.families.length} عائلة · ${res.fileCount} ملف`;
-      status(d.summary);
+      rebuildInstalled(res.families);
     } else {
       const [id, section] = key.split(':');
       const res = await api.listSource(id, { section, page, force });
-      const seen = new Set(d.items.map((i) => i.id));
-      d.items = d.items.concat(res.items.filter((i) => !seen.has(i.id)));
+      // Same font listed twice under one name (different pages/ids) is shown once.
+      const seen = new Set(d.items.flatMap((i) => [i.id, normalizeKey(i.name)]));
+      for (const it of res.items) {
+        const k = normalizeKey(it.name);
+        if (seen.has(it.id) || seen.has(k)) continue;
+        seen.add(it.id); seen.add(k);
+        d.items.push(it);
+      }
       d.hasMore = !!res.hasMore && res.items.length > 0;
       d.stale = !!res.stale;
       if (id === 'all') { d.arabic = res.arabicCount; d.target = res.target; if (res.warnings?.length) toast(res.warnings[0], 4000); }
-      d.summary = res.stale ? 'بدون اتصال · نسخة مخزّنة'
-        : id === 'all' ? `خطوط عربية فريدة: ${d.arabic}${d.arabic < d.target ? ` (أقل من ${d.target})` : ''}`
-        : `${SOURCES[id].label} · ${d.items.length}`;
-      status(d.summary);
     }
     d.page = page;
     d.error = null;
+    status(statusLine(d));
   } catch (err) {
     d.error = String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
     status('خطأ في التحميل', 'err');
@@ -338,7 +420,8 @@ async function fetchPage(key, d, page, force = false) {
   if (page === 1 || d.error || S.lang === 'all') refresh(); // 'all' re-sorts Arabic-first, so rebuild
   else { // appended page: keep scroll position, just extend the view
     S.view = computeView();
-    $('count').textContent = `${S.view.length} / ${d.items.length}${d.hasMore ? '+' : ''}`;
+    renderFilters();
+    $('count').textContent = `${S.view.length} / ${tabItems(d).length}${d.hasMore ? '+' : ''}`;
     renderMore();
   }
 }
@@ -359,14 +442,14 @@ function setLang(id) {
 }
 function setCat(id) {
   S.cat = id;
-  if (SOURCES[S.source].sections) load(); // remote section
+  if (SOURCES[S.source].sections) { load(); const d = current(); setStatus(d?.loading ? 'جارٍ التحميل…' : statusLine(d), d?.loading ? 'busy' : ''); }
   refresh();
 }
 function setSource(id) {
   S.source = id; S.cat = 'all'; store.set('source', id);
   for (const b of $('sources').querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.source === id));
   const d = current();
-  setStatus(d?.loading ? 'جارٍ التحميل…' : d?.summary || 'جاهز', d?.loading ? 'busy' : '');
+  setStatus(d?.loading ? 'جارٍ التحميل…' : statusLine(d), d?.loading ? 'busy' : '');
   load();
   refresh();
 }
@@ -394,13 +477,15 @@ function init() {
   $('favOnly').onclick = () => { S.favOnly = !S.favOnly; $('favOnly').setAttribute('aria-pressed', String(S.favOnly)); refresh(); };
   $('refresh').onclick = () => load(true);
   $('more').onclick = () => { const d = current(); if (d && d.hasMore && !d.loading) fetchPage(dataKey(), d, d.page + 1); };
-  api.onSourceProgress(({ page, arabicCount }) => {
-    if (S.source === 'all') setStatus(page ? `الفونت العربي · صفحة ${page} · عربي فريد ${arabicCount}` : `عربي فريد ${arabicCount}`, 'busy');
+  api.onInstallEvent((ev) => finishInstall(ev.id, ev));
+  api.onSourceProgress(({ page, arabicCount, alfontCount }) => {
+    if (dataKey() === 'all') setStatus(page ? `الفونت العربي · صفحة ${page} · ${alfontCount} غير مكرر · عربي فريد ${arabicCount}` : `عربي فريد ${arabicCount}`, 'busy');
   });
   api.onScanProgress(({ done, total }) => { if (S.source === 'local') setStatus(`فحص الخطوط ${done} / ${total}`, 'busy'); });
 
   sentinelIO.observe($('sentinel'));
   setSource(S.source);
+  if (S.source !== 'local') scanLocalQuiet(); // needed to know which online fonts are already installed
 }
 
 init();

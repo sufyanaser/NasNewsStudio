@@ -138,3 +138,69 @@ test('all: a failing source degrades to a warning, not an error', async () => {
   assert.deepEqual(res.warnings, ['offline', 'alfont down']);
   assert.equal(res.hasMore, true);
 });
+
+test('zip + install: extracts fonts from an archive and installs only real fonts', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const { readFile, mkdtemp, readdir, rm } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const { extractFontsFromZip, isZip } = await import('../src/main/fonts/zip.js');
+  const { installFontFiles, fontsFromDownload, safeFileName, userFontDir } = await import('../src/main/fonts/install.js');
+
+  const font = await readFile(path.join(FONTS, 'IBMPlexSansArabic-Regular.ttf'));
+  const entries = [
+    { name: '../../evil/Plex Regular.ttf', data: font, method: 8 },   // path traversal attempt
+    { name: 'docs/readme.txt', data: Buffer.from('hi'), method: 0 },
+    { name: '__MACOSX/._junk.ttf', data: Buffer.from('x'), method: 0 },
+    { name: 'fake.otf', data: Buffer.from('not a font at all'), method: 0 },
+  ];
+  const locals = []; const central = []; let offset = 0;
+  for (const e of entries) {
+    const body = e.method === 8 ? deflateRawSync(e.data) : e.data;
+    const n = Buffer.from(e.name, 'utf8');
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(0x800, 6); lh.writeUInt16LE(e.method, 8);
+    lh.writeUInt32LE(body.length, 18); lh.writeUInt32LE(e.data.length, 22); lh.writeUInt16LE(n.length, 26);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(0x800, 8); ch.writeUInt16LE(e.method, 10);
+    ch.writeUInt32LE(body.length, 20); ch.writeUInt32LE(e.data.length, 24); ch.writeUInt16LE(n.length, 28); ch.writeUInt32LE(offset, 42);
+    locals.push(lh, n, body); central.push(ch, n); offset += 30 + n.length + body.length;
+  }
+  const cd = Buffer.concat(central);
+  const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(offset, 16);
+  const zip = Buffer.concat([...locals, cd, eocd]);
+
+  assert.equal(isZip(zip), true);
+  const fonts = extractFontsFromZip(zip);
+  assert.deepEqual(fonts.map((f) => f.name), ['Plex Regular.ttf', 'fake.otf']);
+  assert.ok(fonts[0].data.equals(font));
+
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'nfs-test-'));
+  try {
+    const res = await installFontFiles(fontsFromDownload('pack.zip', zip), { dir, platform: 'linux' });
+    assert.deepEqual(res.installed.map((i) => i.family), ['IBM Plex Sans Arabic']);
+    assert.deepEqual(res.skipped, ['fake.otf']);
+    assert.deepEqual(await readdir(dir), ['Plex Regular.ttf']);   // nothing escaped the folder, fake not written
+  } finally { await rm(dir, { recursive: true, force: true }); }
+
+  assert.equal(safeFileName('..\\..\\x/Cairo-700.TTF'), 'Cairo-700.ttf');
+  assert.equal(safeFileName('خط عربي.otf'), 'خط عربي.otf');
+  assert.equal(safeFileName('run.exe'), null);
+  assert.ok(userFontDir('win32', { LOCALAPPDATA: 'C:\\L' }, 'C:\\U').endsWith('Fonts'));
+  assert.equal(userFontDir('darwin', {}, '/Users/x'), '/Users/x/Library/Fonts');
+});
+
+test('all: keeps pulling alfont until 250 fonts no other source has', async () => {
+  const { createAggregator } = await import('../src/main/sources/all.js');
+  const mk = (source, name) => ({ id: `${source}:${name}`, source, name, altName: '', langs: ['ar'], category: 'other' });
+  const agg = createAggregator({
+    google: async () => ({ items: Array.from({ length: 2000 }, (_, i) => mk('google', `G ${i}`)) }),
+    andalusi: async () => ({ items: Array.from({ length: 200 }, (_, i) => mk('andalusi', `A ${i}`)) }),
+    // half of every alfont page already exists in Google -> must not count toward the 250
+    alfont: async ({ page }) => ({ items: Array.from({ length: 10 }, (_, i) => (i % 2 ? mk('alfont', `G ${page * 10 + i}`) : mk('alfont', `AF ${page}-${i}`))), hasMore: true }),
+  });
+  const res = await agg.list({});
+  const alfont = res.items.filter((i) => i.source === 'alfont');
+  assert.equal(alfont.length, 250);
+  assert.equal(res.alfontCount, 250);
+  assert.ok(alfont.every((i) => i.name.startsWith('AF ')));
+  assert.equal(alfont[0].name, 'AF 1-0'); // newest first
+});
