@@ -7,11 +7,16 @@ import { configureHttp } from './sources/http.js';
 import { listGoogle } from './sources/google.js';
 import { listAlfont } from './sources/alfont.js';
 import { listAndalusi } from './sources/andalusi.js';
+import { createAggregator } from './sources/all.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RENDERER = path.join(__dirname, '..', 'renderer', 'index.html');
 const EXTERNAL_HOSTS = ['alfont.com', 'andalusi.app', 'fonts.google.com'];
-const SOURCES = { google: listGoogle, alfont: listAlfont, andalusi: listAndalusi };
+const aggregator = createAggregator({ google: listGoogle, alfont: listAlfont, andalusi: listAndalusi });
+const SOURCES = {
+  google: listGoogle, alfont: listAlfont, andalusi: listAndalusi,
+  all: (params) => aggregator.list({ ...params, onProgress: (p) => win?.webContents.send('source:progress', p) }),
+};
 
 /** faceId -> absolute font file path. Only files found by the scanner can ever be served. */
 let fontFiles = new Map();

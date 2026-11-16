@@ -10,6 +10,7 @@ const store = {
 
 const SOURCES = {
   local: { label: 'خطوط الجهاز', live: true },
+  all: { label: 'كل المصادر', live: true, mixed: true },
   google: { label: 'Google Fonts', live: true },
   alfont: { label: 'الفونت العربي', live: false, paged: true,
     sections: [['all', 'الكل'], ['new', 'الجديد'], ['naskh', 'نسخ'], ['ruqaa', 'رقعة'], ['diwani', 'ديواني'], ['thuluth', 'ثلث']] },
@@ -144,6 +145,7 @@ function buildCard(item) {
   }
   if (item.langs.length > 4) foot.append(el('span', { class: 'tag', text: `+${item.langs.length - 4}` }));
   if (CAT_LABEL[item.category] && item.category !== 'other') foot.append(el('span', { class: 'tag', text: CAT_LABEL[item.category] }));
+  if (S.source === 'all') foot.append(el('span', { class: 'tag src', text: SOURCES[item.source].label }));
 
   const card = el('article', { class: 'card' }, [
     el('header', {}, [
@@ -244,8 +246,9 @@ function renderFilters() {
   }
 
   const note = $('note');
-  note.hidden = src.live;
-  if (!src.live) note.textContent = 'معاينة هذا المصدر صور جاهزة من الموقع نفسه، لذلك النص التجريبي لا ينطبق هنا. افتح صفحة الخط للتجربة والتحميل.';
+  note.hidden = src.live && !src.mixed;
+  if (src.mixed) note.textContent = 'قائمة موحّدة بدون تكرار من Google Fonts وأندلسي والفونت العربي. النص التجريبي ينطبق على خطوط Google، والباقي معاينته صور من الموقع المصدر.';
+  else if (!src.live) note.textContent = 'معاينة هذا المصدر صور جاهزة من الموقع نفسه، لذلك النص التجريبي لا ينطبق هنا. افتح صفحة الخط للتجربة والتحميل.';
   $('sample').disabled = !src.live;
 }
 
@@ -317,7 +320,10 @@ async function fetchPage(key, d, page, force = false) {
       d.items = d.items.concat(res.items.filter((i) => !seen.has(i.id)));
       d.hasMore = !!res.hasMore && res.items.length > 0;
       d.stale = !!res.stale;
-      d.summary = res.stale ? 'بدون اتصال · نسخة مخزّنة' : `${SOURCES[id].label} · ${d.items.length}`;
+      if (id === 'all') { d.arabic = res.arabicCount; d.target = res.target; if (res.warnings?.length) toast(res.warnings[0], 4000); }
+      d.summary = res.stale ? 'بدون اتصال · نسخة مخزّنة'
+        : id === 'all' ? `خطوط عربية فريدة: ${d.arabic}${d.arabic < d.target ? ` (أقل من ${d.target})` : ''}`
+        : `${SOURCES[id].label} · ${d.items.length}`;
       status(d.summary);
     }
     d.page = page;
@@ -329,7 +335,7 @@ async function fetchPage(key, d, page, force = false) {
     d.loading = false;
   }
   if (key !== dataKey()) return;
-  if (page === 1 || d.error) refresh();
+  if (page === 1 || d.error || S.lang === 'all') refresh(); // 'all' re-sorts Arabic-first, so rebuild
   else { // appended page: keep scroll position, just extend the view
     S.view = computeView();
     $('count').textContent = `${S.view.length} / ${d.items.length}${d.hasMore ? '+' : ''}`;
@@ -388,6 +394,9 @@ function init() {
   $('favOnly').onclick = () => { S.favOnly = !S.favOnly; $('favOnly').setAttribute('aria-pressed', String(S.favOnly)); refresh(); };
   $('refresh').onclick = () => load(true);
   $('more').onclick = () => { const d = current(); if (d && d.hasMore && !d.loading) fetchPage(dataKey(), d, d.page + 1); };
+  api.onSourceProgress(({ page, arabicCount }) => {
+    if (S.source === 'all') setStatus(page ? `الفونت العربي · صفحة ${page} · عربي فريد ${arabicCount}` : `عربي فريد ${arabicCount}`, 'busy');
+  });
   api.onScanProgress(({ done, total }) => { if (S.source === 'local') setStatus(`فحص الخطوط ${done} / ${total}`, 'busy'); });
 
   sentinelIO.observe($('sentinel'));

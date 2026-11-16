@@ -5,6 +5,7 @@ Desktop font browser for NAS FM 98.7 (Electron). Arabic-first.
 | Mode | Source | Preview |
 |------|--------|---------|
 | 01 · Desktop | Fonts installed on this machine (system + user + Adobe Fonts sync folders) | Live text, per-weight |
+| 02 · Online | كل المصادر — the three catalogs merged, de-duplicated by name, filled to ≥ 500 unique Arabic fonts | Mixed |
 | 02 · Online | Google Fonts | Live text (CSS2 API) |
 | 02 · Online | alfont.com | Site specimen image + link to the font page |
 | 02 · Online | andalusi.app/fonts | Site specimen image + link to the font page |

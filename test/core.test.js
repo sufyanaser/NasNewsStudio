@@ -95,3 +95,46 @@ test('helpers', () => {
   assert.equal(classifyByName('Noto Kufi Arabic'), 'kufi');
   assert.equal(classifyByName('Whatever'), null);
 });
+
+test('all: merges sources without duplicates and fills to the Arabic target', async () => {
+  const { createAggregator, normalizeKey } = await import('../src/main/sources/all.js');
+  assert.equal(normalizeKey('Reem-Kufi  '), normalizeKey('reem kufi'));
+  assert.equal(normalizeKey('خـط الـمشرف'), normalizeKey('خط المشرف'));
+  const mk = (source, name, lang = 'ar', altName = '') => ({ id: `${source}:${name}`, source, name, altName, langs: [lang], category: 'other' });
+  let calls = 0;
+  const agg = createAggregator({
+    google: async () => ({ items: [mk('google', 'Cairo'), mk('google', 'Roboto', 'en'), mk('google', 'Rakan')] }),
+    andalusi: async () => ({ items: [mk('andalusi', 'راكان', 'ar', 'RAKAN'), mk('andalusi', 'cairo'), mk('andalusi', 'سميك', 'ar', 'Sameek')] }),
+    alfont: async ({ page }) => {
+      calls++;
+      // every page repeats one earlier name -> must be dropped
+      return { items: [mk('alfont', 'Sameek'), ...Array.from({ length: 10 }, (_, i) => mk('alfont', `AF ${page}-${i}`))], hasMore: page < 100 };
+    },
+  });
+  const first = await agg.list({ target: 500 });
+  const arabic = first.items.filter((i) => i.langs.includes('ar'));
+  assert.ok(arabic.length >= 500);
+  assert.equal(first.arabicCount, arabic.length);
+  assert.equal(calls, 50); // 3 unique from google/andalusi + 10 per page
+  const keys = first.items.flatMap((i) => [i.name, i.altName].filter(Boolean).map(normalizeKey));
+  assert.equal(new Set(keys).size, keys.length);
+  assert.equal(first.items[0].source, 'google');           // live-preview source wins the clash and leads
+  assert.equal(first.items.at(-1).name, 'Roboto');         // non-Arabic last
+  assert.equal(first.hasMore, true);
+  const more = await agg.list({ page: 2 });
+  assert.equal(more.items.length, 50);
+  assert.ok(more.items.every((i) => !keys.includes(normalizeKey(i.name))));
+});
+
+test('all: a failing source degrades to a warning, not an error', async () => {
+  const { createAggregator } = await import('../src/main/sources/all.js');
+  const agg = createAggregator({
+    google: async () => { throw new Error('offline'); },
+    andalusi: async () => ({ items: [{ id: 'a', source: 'andalusi', name: 'خط', altName: 'Khat', langs: ['ar'] }] }),
+    alfont: async () => { throw new Error('alfont down'); },
+  });
+  const res = await agg.list({ target: 500 });
+  assert.equal(res.items.length, 1);
+  assert.deepEqual(res.warnings, ['offline', 'alfont down']);
+  assert.equal(res.hasMore, true);
+});

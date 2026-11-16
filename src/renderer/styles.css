@@ -125,3 +125,5 @@ input[type="range"] { width: 100%; accent-color: var(--nas-blue); height: 40px; 
 /* LTR technical strings inside the RTL layout */
 .field .label { text-align: right; }
 .count { direction: ltr; unicode-bidi: isolate; }
+
+.tag.src { color: var(--nas-silver); border-color: var(--nas-line-2); }
