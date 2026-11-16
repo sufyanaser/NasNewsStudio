@@ -205,6 +205,7 @@ function createWindow() {
     width: 1360, height: 880, minWidth: 420, minHeight: 560,
     backgroundColor: '#070708',
     title: 'NAS Font Studio',
+    icon: path.join(__dirname, '..', 'renderer', 'assets', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
