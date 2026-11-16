@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' nasfont: https://fonts.gstatic.com; img-src 'self' data: https://alfont.com https://storage.andalusi.app; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>NAS Font Studio</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <div class="lockup">
+      <img src="assets/nas-fm-logo.png" width="40" height="40" alt="">
+      <div>
+        <div class="brand">NAS FM <span class="freq">98.7 MHz</span></div>
+        <h1>استوديو الخطوط</h1>
+      </div>
+    </div>
+    <div class="status" id="status" aria-live="polite"><i class="dot"></i><span id="statusText">جاهز</span></div>
+  </header>
+
+  <nav class="sources" id="sources" role="tablist" aria-label="مصدر الخطوط">
+    <div class="group">
+      <span class="label">01 · DESKTOP</span>
+      <button role="tab" data-source="local" aria-selected="true">خطوط الجهاز</button>
+    </div>
+    <div class="group">
+      <span class="label">02 · ONLINE</span>
+      <button role="tab" data-source="google" aria-selected="false">Google Fonts</button>
+      <button role="tab" data-source="alfont" aria-selected="false">الفونت العربي</button>
+      <button role="tab" data-source="andalusi" aria-selected="false">أندلسي</button>
+    </div>
+  </nav>
+
+  <section class="bar">
+    <div class="fields">
+      <label class="field grow"><span class="label">SAMPLE</span>
+        <input type="text" id="sample" dir="auto" placeholder="اكتب النص التجريبي هنا" autocomplete="off"></label>
+      <label class="field"><span class="label">SEARCH</span>
+        <input type="search" id="q" dir="auto" placeholder="ابحث باسم الخط" autocomplete="off"></label>
+      <label class="field size"><span class="label">SIZE <b id="sizeVal">40</b></span>
+        <input type="range" id="size" min="16" max="120" value="40"></label>
+    </div>
+    <div class="row">
+      <span class="label">LANGUAGE</span>
+      <div class="chips" id="langs" role="group" aria-label="لغة الخطوط"></div>
+    </div>
+    <div class="row">
+      <span class="label">TYPE</span>
+      <div class="chips" id="cats" role="group" aria-label="نوع الخط"></div>
+    </div>
+    <p class="note" id="note" hidden></p>
+  </section>
+
+  <div class="meta">
+    <span id="count" class="count"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="favOnly" type="button" aria-pressed="false">المفضلة</button>
+    <button class="btn" id="refresh" type="button">تحديث</button>
+  </div>
+
+  <main>
+    <div class="grid" id="grid"></div>
+    <div class="state" id="state" hidden></div>
+    <div class="more" id="moreRow" hidden><button class="btn" id="more" type="button">تحميل المزيد</button></div>
+    <div id="sentinel" aria-hidden="true"></div>
+  </main>
+
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

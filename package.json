@@ -1,0 +1,28 @@
+{
+  "name": "nas-font-studio",
+  "productName": "NAS Font Studio",
+  "version": "1.0.0",
+  "description": "Desktop font browser: installed system fonts + online Arabic font catalogs, Arabic-first.",
+  "author": "NAS FM 98.7",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "fm.nas.fontstudio",
+    "files": ["src/**/*", "package.json"],
+    "win": { "target": ["nsis", "portable"] },
+    "mac": { "target": ["dmg"], "category": "public.app-category.graphics-design" },
+    "linux": { "target": ["AppImage"], "category": "Graphics" }
+  }
+}
